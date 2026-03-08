@@ -1,9 +1,33 @@
 use crate::instance::{AuError, Result};
 use crate::types::*;
 use objc2::msg_send;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, Sel};
 use std::ffi::CString;
 use std::os::raw::c_void;
+
+// Typed objc_msgSend trampolines for calls where objc2's msg_send! macro
+// rejects the type encoding (e.g., passing AudioUnit or CFURL which are
+// C opaque pointers, not ObjC objects).
+//
+// On ARM64, objc_msgSend is NOT variadic — it uses the standard calling
+// convention. We must declare each signature explicitly so struct args
+// (like NSSize) are passed in the correct registers.
+extern "C" {
+    #[link_name = "objc_msgSend"]
+    fn msg_send_bundle_with_url(
+        receiver: *mut AnyObject,
+        sel: Sel,
+        url: *const c_void,
+    ) -> *mut AnyObject;
+
+    #[link_name = "objc_msgSend"]
+    fn msg_send_ui_view_for_au(
+        receiver: *mut AnyObject,
+        sel: Sel,
+        unit: AudioUnit,
+        size: NSSize,
+    ) -> *mut AnyObject;
+}
 
 /// Wraps an AU's Cocoa NSView for GUI hosting.
 pub struct AuEditor {
@@ -136,11 +160,14 @@ unsafe fn create_cocoa_view(unit: AudioUnit) -> Result<*mut AnyObject> {
         ));
     }
 
-    // Load the bundle containing the view factory
+    // Load the bundle containing the view factory.
+    // Use raw objc_msgSend because bundle_url is a CFURLRef (toll-free bridged to NSURL),
+    // not a proper ObjC object, and objc2's msg_send! rejects the type encoding mismatch.
     let ns_bundle_class =
         objc2::runtime::AnyClass::get(c"NSBundle").expect("NSBundle class must exist");
+    let sel_bundle_with_url = Sel::register(c"bundleWithURL:");
     let bundle: *mut AnyObject =
-        msg_send![ns_bundle_class, bundleWithURL: bundle_url as *mut c_void];
+        msg_send_bundle_with_url(ns_bundle_class as *const _ as *mut AnyObject, sel_bundle_with_url, bundle_url as *const c_void);
     if bundle.is_null() {
         core_foundation_sys::base::CFRelease(bundle_url as *const c_void);
         core_foundation_sys::base::CFRelease(class_name as *const c_void);
@@ -175,11 +202,14 @@ unsafe fn create_cocoa_view(unit: AudioUnit) -> Result<*mut AnyObject> {
     }
 
     // AUCocoaUIBase protocol: -uiViewForAudioUnit:withSize:
+    // Use raw objc_msgSend because AudioUnit is a C opaque pointer, not an ObjC object,
+    // and objc2's msg_send! rejects the type encoding mismatch.
     let size = NSSize {
         width: 800.0,
         height: 600.0,
     };
-    let view: *mut AnyObject = msg_send![factory, uiViewForAudioUnit: unit, withSize: size];
+    let sel_ui_view = Sel::register(c"uiViewForAudioUnit:withSize:");
+    let view: *mut AnyObject = msg_send_ui_view_for_au(factory, sel_ui_view, unit, size);
 
     let _: () = msg_send![factory, release];
 
