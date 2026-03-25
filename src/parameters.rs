@@ -71,27 +71,14 @@ pub fn get_parameter_list(unit: AudioUnit) -> Vec<AuParameter> {
 pub fn get_parameter_value(unit: AudioUnit, param_id: u32) -> f32 {
     let mut value: f32 = 0.0;
     unsafe {
-        AudioUnitGetParameter(
-            unit,
-            param_id,
-            K_AUDIO_UNIT_SCOPE_GLOBAL,
-            0,
-            &mut value,
-        );
+        AudioUnitGetParameter(unit, param_id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, &mut value);
     }
     value
 }
 
 pub fn set_parameter_value(unit: AudioUnit, param_id: u32, value: f32) {
     unsafe {
-        AudioUnitSetParameter(
-            unit,
-            param_id,
-            K_AUDIO_UNIT_SCOPE_GLOBAL,
-            0,
-            value,
-            0,
-        );
+        AudioUnitSetParameter(unit, param_id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, value, 0);
     }
 }
 
@@ -154,9 +141,7 @@ fn query_parameter_info(unit: AudioUnit, param_id: u32) -> Option<AuParameter> {
     {
         let s = unsafe { cfstring_to_string(info.name_string) };
         unsafe {
-            core_foundation_sys::base::CFRelease(
-                info.name_string as *const std::os::raw::c_void,
-            );
+            core_foundation_sys::base::CFRelease(info.name_string as *const std::os::raw::c_void);
         }
         s
     } else {
@@ -227,12 +212,7 @@ mod tests {
         let mid = (p.min + p.max) / 2.0;
         set_parameter_value(unit, p.id, mid);
         let val = get_parameter_value(unit, p.id);
-        assert!(
-            (val - mid).abs() < 0.01,
-            "Expected ~{}, got {}",
-            mid,
-            val
-        );
+        assert!((val - mid).abs() < 0.01, "Expected ~{}, got {}", mid, val);
 
         unsafe {
             AudioUnitUninitialize(unit);

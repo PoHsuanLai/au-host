@@ -3,9 +3,9 @@
 //! Wraps a single AudioComponentInstance (AUv2 plugin) with a safe Rust API.
 
 #[cfg(target_os = "macos")]
-use crate::types::*;
-#[cfg(target_os = "macos")]
 use crate::component::AuType;
+#[cfg(target_os = "macos")]
+use crate::types::*;
 
 use std::fmt;
 
@@ -13,10 +13,7 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub enum AuError {
     /// An AudioToolbox call returned a non-zero OSStatus.
-    OsStatus {
-        function: &'static str,
-        code: i32,
-    },
+    OsStatus { function: &'static str, code: i32 },
     /// The component handle was null.
     NullComponent,
     /// The AU instance is not initialized.
@@ -148,10 +145,9 @@ impl AuInstance {
         }
 
         let mut instance: AudioComponentInstance = std::ptr::null_mut();
-        check(
-            "AudioComponentInstanceNew",
-            unsafe { AudioComponentInstanceNew(component, &mut instance) },
-        )?;
+        check("AudioComponentInstanceNew", unsafe {
+            AudioComponentInstanceNew(component, &mut instance)
+        })?;
 
         // Determine AU type
         let mut desc = AudioComponentDescription::default();
@@ -185,19 +181,16 @@ impl AuInstance {
 
         // Set maximum frames per slice
         let max_frames = self.block_size;
-        check(
-            "SetProperty(MaxFramesPerSlice)",
-            unsafe {
-                AudioUnitSetProperty(
-                    unit,
-                    K_AUDIO_UNIT_PROPERTY_MAXIMUM_FRAMES_PER_SLICE,
-                    K_AUDIO_UNIT_SCOPE_GLOBAL,
-                    0,
-                    &max_frames as *const u32 as *const std::os::raw::c_void,
-                    std::mem::size_of::<u32>() as u32,
-                )
-            },
-        )?;
+        check("SetProperty(MaxFramesPerSlice)", unsafe {
+            AudioUnitSetProperty(
+                unit,
+                K_AUDIO_UNIT_PROPERTY_MAXIMUM_FRAMES_PER_SLICE,
+                K_AUDIO_UNIT_SCOPE_GLOBAL,
+                0,
+                &max_frames as *const u32 as *const std::os::raw::c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        })?;
 
         // Query the default output stream format to discover channel count
         let mut asbd = AudioStreamBasicDescription::default();
@@ -234,7 +227,8 @@ impl AuInstance {
         }
 
         // Set our desired stream format on the output scope
-        let out_asbd = AudioStreamBasicDescription::float32(self.sample_rate, self.num_outputs.max(2));
+        let out_asbd =
+            AudioStreamBasicDescription::float32(self.sample_rate, self.num_outputs.max(2));
         self.num_outputs = out_asbd.channels_per_frame;
         let _ = unsafe {
             AudioUnitSetProperty(
@@ -249,16 +243,14 @@ impl AuInstance {
 
         // Set input stream format if we have inputs
         if self.num_inputs > 0 {
-            let in_asbd =
-                AudioStreamBasicDescription::float32(self.sample_rate, self.num_inputs);
+            let in_asbd = AudioStreamBasicDescription::float32(self.sample_rate, self.num_inputs);
             let _ = unsafe {
                 AudioUnitSetProperty(
                     unit,
                     K_AUDIO_UNIT_PROPERTY_STREAM_FORMAT,
                     K_AUDIO_UNIT_SCOPE_INPUT,
                     0,
-                    &in_asbd as *const AudioStreamBasicDescription
-                        as *const std::os::raw::c_void,
+                    &in_asbd as *const AudioStreamBasicDescription as *const std::os::raw::c_void,
                     std::mem::size_of::<AudioStreamBasicDescription>() as u32,
                 )
             };
@@ -269,10 +261,9 @@ impl AuInstance {
 
     /// Initialize the Audio Unit. Must be called before processing.
     pub fn initialize(&mut self) -> Result<()> {
-        check(
-            "AudioUnitInitialize",
-            unsafe { AudioUnitInitialize(self.component_instance) },
-        )?;
+        check("AudioUnitInitialize", unsafe {
+            AudioUnitInitialize(self.component_instance)
+        })?;
         self.initialized = true;
 
         // Allocate render buffers now that we know the format
@@ -284,10 +275,9 @@ impl AuInstance {
     /// Uninitialize the Audio Unit.
     pub fn uninitialize(&mut self) -> Result<()> {
         if self.initialized {
-            check(
-                "AudioUnitUninitialize",
-                unsafe { AudioUnitUninitialize(self.component_instance) },
-            )?;
+            check("AudioUnitUninitialize", unsafe {
+                AudioUnitUninitialize(self.component_instance)
+            })?;
             self.initialized = false;
         }
         Ok(())
@@ -301,22 +291,20 @@ impl AuInstance {
         // Allocate per-channel output buffers
         self.output_sample_buffers.clear();
         for _ in 0..num_channels {
-            self.output_sample_buffers
-                .push(vec![0.0f32; buffer_size]);
+            self.output_sample_buffers.push(vec![0.0f32; buffer_size]);
         }
 
         // Allocate per-channel input buffers
         let num_in = self.num_inputs as usize;
         self.input_sample_buffers.clear();
         for _ in 0..num_in.max(num_channels) {
-            self.input_sample_buffers
-                .push(vec![0.0f32; buffer_size]);
+            self.input_sample_buffers.push(vec![0.0f32; buffer_size]);
         }
 
         // Allocate the AudioBufferList in raw bytes
         // Layout: u32 (number_buffers) + N * AudioBuffer
-        let abl_size = std::mem::size_of::<u32>()
-            + num_channels * std::mem::size_of::<AudioBuffer>();
+        let abl_size =
+            std::mem::size_of::<u32>() + num_channels * std::mem::size_of::<AudioBuffer>();
         self.render_buffer_list = vec![0u8; abl_size];
     }
 
@@ -336,8 +324,7 @@ impl AuInstance {
                 let buf = &mut *buffers_ptr.add(ch);
                 buf.number_channels = 1; // non-interleaved
                 buf.data_byte_size = num_frames * std::mem::size_of::<f32>() as u32;
-                buf.data = self.output_sample_buffers[ch].as_mut_ptr()
-                    as *mut std::os::raw::c_void;
+                buf.data = self.output_sample_buffers[ch].as_mut_ptr() as *mut std::os::raw::c_void;
             }
 
             abl
@@ -387,19 +374,16 @@ impl AuInstance {
 
         // Render
         let mut action_flags: AudioUnitRenderActionFlags = 0;
-        check(
-            "AudioUnitRender",
-            unsafe {
-                AudioUnitRender(
-                    self.component_instance,
-                    &mut action_flags,
-                    &timestamp,
-                    0, // output bus 0
-                    num_frames,
-                    abl,
-                )
-            },
-        )?;
+        check("AudioUnitRender", unsafe {
+            AudioUnitRender(
+                self.component_instance,
+                &mut action_flags,
+                &timestamp,
+                0, // output bus 0
+                num_frames,
+                abl,
+            )
+        })?;
 
         // Advance sample position
         self.sample_position += num_frames as f64;
@@ -423,53 +407,44 @@ impl AuInstance {
             input_proc_ref_con: self as *mut AuInstance as *mut std::os::raw::c_void,
         };
 
-        check(
-            "SetProperty(RenderCallback)",
-            unsafe {
-                AudioUnitSetProperty(
-                    self.component_instance,
-                    K_AUDIO_UNIT_PROPERTY_SET_RENDER_CALLBACK,
-                    K_AUDIO_UNIT_SCOPE_INPUT,
-                    0,
-                    &callback as *const AURenderCallbackStruct as *const std::os::raw::c_void,
-                    std::mem::size_of::<AURenderCallbackStruct>() as u32,
-                )
-            },
-        )
+        check("SetProperty(RenderCallback)", unsafe {
+            AudioUnitSetProperty(
+                self.component_instance,
+                K_AUDIO_UNIT_PROPERTY_SET_RENDER_CALLBACK,
+                K_AUDIO_UNIT_SCOPE_INPUT,
+                0,
+                &callback as *const AURenderCallbackStruct as *const std::os::raw::c_void,
+                std::mem::size_of::<AURenderCallbackStruct>() as u32,
+            )
+        })
     }
 
     /// Set a parameter value.
     pub fn set_parameter(&mut self, id: u32, value: f32) -> Result<()> {
-        check(
-            "AudioUnitSetParameter",
-            unsafe {
-                AudioUnitSetParameter(
-                    self.component_instance,
-                    id,
-                    K_AUDIO_UNIT_SCOPE_GLOBAL,
-                    0,
-                    value,
-                    0,
-                )
-            },
-        )
+        check("AudioUnitSetParameter", unsafe {
+            AudioUnitSetParameter(
+                self.component_instance,
+                id,
+                K_AUDIO_UNIT_SCOPE_GLOBAL,
+                0,
+                value,
+                0,
+            )
+        })
     }
 
     /// Get a parameter value.
     pub fn get_parameter(&self, id: u32) -> Result<f32> {
         let mut value: f32 = 0.0;
-        check(
-            "AudioUnitGetParameter",
-            unsafe {
-                AudioUnitGetParameter(
-                    self.component_instance,
-                    id,
-                    K_AUDIO_UNIT_SCOPE_GLOBAL,
-                    0,
-                    &mut value,
-                )
-            },
-        )?;
+        check("AudioUnitGetParameter", unsafe {
+            AudioUnitGetParameter(
+                self.component_instance,
+                id,
+                K_AUDIO_UNIT_SCOPE_GLOBAL,
+                0,
+                &mut value,
+            )
+        })?;
         Ok(value)
     }
 
@@ -528,19 +503,16 @@ impl AuInstance {
         let mut info: AudioUnitParameterInfo = unsafe { std::mem::zeroed() };
         let mut size = std::mem::size_of::<AudioUnitParameterInfo>() as u32;
 
-        check(
-            "GetProperty(ParameterInfo)",
-            unsafe {
-                AudioUnitGetProperty(
-                    unit,
-                    K_AUDIO_UNIT_PROPERTY_PARAMETER_INFO,
-                    K_AUDIO_UNIT_SCOPE_GLOBAL,
-                    param_id,
-                    &mut info as *mut AudioUnitParameterInfo as *mut std::os::raw::c_void,
-                    &mut size,
-                )
-            },
-        )?;
+        check("GetProperty(ParameterInfo)", unsafe {
+            AudioUnitGetProperty(
+                unit,
+                K_AUDIO_UNIT_PROPERTY_PARAMETER_INFO,
+                K_AUDIO_UNIT_SCOPE_GLOBAL,
+                param_id,
+                &mut info as *mut AudioUnitParameterInfo as *mut std::os::raw::c_void,
+                &mut size,
+            )
+        })?;
 
         // Extract name: prefer CFString name, fall back to C char array
         let name = if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0
@@ -556,7 +528,11 @@ impl AuInstance {
             s
         } else {
             // Read from the fixed char array
-            let end = info.name.iter().position(|&b| b == 0).unwrap_or(info.name.len());
+            let end = info
+                .name
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(info.name.len());
             String::from_utf8_lossy(&info.name[..end]).to_string()
         };
 
@@ -599,25 +575,21 @@ impl AuInstance {
     /// Save the AU's state as a property list (binary plist).
     pub fn save_state(&self) -> Result<Vec<u8>> {
         let unit = self.component_instance;
-        let mut class_info: core_foundation_sys::dictionary::CFDictionaryRef =
-            std::ptr::null();
+        let mut class_info: core_foundation_sys::dictionary::CFDictionaryRef = std::ptr::null();
         let mut size =
             std::mem::size_of::<core_foundation_sys::dictionary::CFDictionaryRef>() as u32;
 
-        check(
-            "GetProperty(ClassInfo)",
-            unsafe {
-                AudioUnitGetProperty(
-                    unit,
-                    K_AUDIO_UNIT_PROPERTY_CLASS_INFO,
-                    K_AUDIO_UNIT_SCOPE_GLOBAL,
-                    0,
-                    &mut class_info as *mut core_foundation_sys::dictionary::CFDictionaryRef
-                        as *mut std::os::raw::c_void,
-                    &mut size,
-                )
-            },
-        )?;
+        check("GetProperty(ClassInfo)", unsafe {
+            AudioUnitGetProperty(
+                unit,
+                K_AUDIO_UNIT_PROPERTY_CLASS_INFO,
+                K_AUDIO_UNIT_SCOPE_GLOBAL,
+                0,
+                &mut class_info as *mut core_foundation_sys::dictionary::CFDictionaryRef
+                    as *mut std::os::raw::c_void,
+                &mut size,
+            )
+        })?;
 
         if class_info.is_null() {
             return Ok(Vec::new());
@@ -676,9 +648,7 @@ impl AuInstance {
             core_foundation_sys::base::CFRelease(cf_data as *const std::os::raw::c_void);
 
             if plist.is_null() {
-                return Err(AuError::InvalidBuffer(
-                    "Failed to deserialize plist".into(),
-                ));
+                return Err(AuError::InvalidBuffer("Failed to deserialize plist".into()));
             }
 
             let result = check(
@@ -835,7 +805,11 @@ mod tests {
     fn test_au_instance_new() {
         let component = find_apple_delay().expect("AUDelay should be present");
         let instance = unsafe { AuInstance::new(component, 44100.0, 512) };
-        assert!(instance.is_ok(), "Failed to create AuInstance: {:?}", instance.err());
+        assert!(
+            instance.is_ok(),
+            "Failed to create AuInstance: {:?}",
+            instance.err()
+        );
     }
 
     #[test]
@@ -847,7 +821,9 @@ mod tests {
         instance.initialize().expect("initialize should succeed");
         assert!(instance.is_initialized());
 
-        instance.uninitialize().expect("uninitialize should succeed");
+        instance
+            .uninitialize()
+            .expect("uninitialize should succeed");
         assert!(!instance.is_initialized());
     }
 
@@ -891,12 +867,7 @@ mod tests {
         instance.set_parameter(p.id, mid).unwrap();
 
         let val = instance.get_parameter(p.id).unwrap();
-        assert!(
-            (val - mid).abs() < 0.01,
-            "Expected ~{}, got {}",
-            mid,
-            val
-        );
+        assert!((val - mid).abs() < 0.01, "Expected ~{}, got {}", mid, val);
     }
 
     #[test]
@@ -929,9 +900,7 @@ mod tests {
         let input: Vec<Vec<f32>> = (0..2)
             .map(|_| {
                 (0..num_frames)
-                    .map(|i| {
-                        (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin() * 0.5
-                    })
+                    .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin() * 0.5)
                     .collect()
             })
             .collect();

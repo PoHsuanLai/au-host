@@ -323,10 +323,8 @@ unsafe impl objc2::encode::Encode for NSSize {
 }
 
 unsafe impl objc2::encode::Encode for NSRect {
-    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
-        "CGRect",
-        &[NSPoint::ENCODING, NSSize::ENCODING],
-    );
+    const ENCODING: objc2::encode::Encoding =
+        objc2::encode::Encoding::Struct("CGRect", &[NSPoint::ENCODING, NSSize::ENCODING]);
 }
 
 // ── AudioUnitParameterInfo ──
@@ -477,14 +475,12 @@ pub fn fourcc_to_string(code: u32) -> String {
 /// # Safety
 /// The caller must ensure `cf_str` is either null or a valid CFStringRef.
 #[cfg(target_os = "macos")]
-pub unsafe fn cfstring_to_string(
-    cf_str: core_foundation_sys::string::CFStringRef,
-) -> String {
+pub unsafe fn cfstring_to_string(cf_str: core_foundation_sys::string::CFStringRef) -> String {
     if cf_str.is_null() {
         return String::new();
     }
-    use core_foundation::string::CFString;
     use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
     // Retain + wrap so CFString doesn't over-release
     let s: CFString = TCFType::wrap_under_get_rule(cf_str);
     s.to_string()

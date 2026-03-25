@@ -181,9 +181,8 @@ unsafe fn create_cocoa_view(unit: AudioUnit) -> Result<*mut AnyObject> {
     // Ensure the bundle's executable is loaded
     let _: bool = msg_send![bundle, load];
 
-    let factory_cstr = CString::new(factory_name.clone()).map_err(|_| {
-        AuError::InvalidBuffer(format!("Invalid class name: {}", factory_name))
-    })?;
+    let factory_cstr = CString::new(factory_name.clone())
+        .map_err(|_| AuError::InvalidBuffer(format!("Invalid class name: {}", factory_name)))?;
     let factory_class = objc2::runtime::AnyClass::get(&factory_cstr);
     core_foundation_sys::base::CFRelease(bundle_url as *const c_void);
     core_foundation_sys::base::CFRelease(class_name as *const c_void);

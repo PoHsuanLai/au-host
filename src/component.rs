@@ -68,10 +68,7 @@ impl AuType {
     pub fn receives_midi(&self) -> bool {
         matches!(
             self,
-            AuType::Instrument
-                | AuType::MusicDevice
-                | AuType::MusicEffect
-                | AuType::MidiProcessor
+            AuType::Instrument | AuType::MusicDevice | AuType::MusicEffect | AuType::MidiProcessor
         )
     }
 }
@@ -117,8 +114,12 @@ fn enumerate_with_desc(desc: AudioComponentDescription) -> Vec<AuComponentInfo> 
     let mut component: AudioComponent = std::ptr::null_mut();
     loop {
         component = unsafe { AudioComponentFindNext(component, &desc) };
-        if component.is_null() { break; }
-        if let Some(info) = component_info(component) { results.push(info); }
+        if component.is_null() {
+            break;
+        }
+        if let Some(info) = component_info(component) {
+            results.push(info);
+        }
     }
     results
 }
