@@ -166,8 +166,11 @@ unsafe fn create_cocoa_view(unit: AudioUnit) -> Result<*mut AnyObject> {
     let ns_bundle_class =
         objc2::runtime::AnyClass::get(c"NSBundle").expect("NSBundle class must exist");
     let sel_bundle_with_url = Sel::register(c"bundleWithURL:");
-    let bundle: *mut AnyObject =
-        msg_send_bundle_with_url(ns_bundle_class as *const _ as *mut AnyObject, sel_bundle_with_url, bundle_url as *const c_void);
+    let bundle: *mut AnyObject = msg_send_bundle_with_url(
+        ns_bundle_class as *const _ as *mut AnyObject,
+        sel_bundle_with_url,
+        bundle_url as *const c_void,
+    );
     if bundle.is_null() {
         core_foundation_sys::base::CFRelease(bundle_url as *const c_void);
         core_foundation_sys::base::CFRelease(class_name as *const c_void);
