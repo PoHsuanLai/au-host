@@ -548,6 +548,14 @@ impl AuInstance {
     }
 
     /// Get the plugin's reported latency in frames.
+    ///
+    /// TODO(plugin-latency-runtime): AU plugins signal latency changes via
+    /// property-change callbacks on `kAudioUnitProperty_Latency`. We don't
+    /// register an `AudioUnitAddPropertyListener` yet, so runtime updates
+    /// are invisible — only the initial value queried here is seen.
+    /// To support runtime updates: register a listener in `load()` that
+    /// flips an atomic flag, poll it in the plugin-server loop (next to
+    /// `poll_latency_changes`), and send `BridgeMessage::LatencyChanged`.
     pub fn get_latency(&self) -> Result<u32> {
         let unit = self.component_instance;
         let mut latency: f64 = 0.0;
