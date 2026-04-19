@@ -1,38 +1,24 @@
 //! Audio Component discovery and enumeration.
-//!
-//! Wraps `AudioComponentFindNext` to enumerate all AUv2 plugins on the system
-//! and provides typed component info.
 
+#[cfg(target_os = "macos")]
+use crate::cf::CfString;
 #[cfg(target_os = "macos")]
 use crate::types::*;
 
-/// The type/category of an Audio Unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuType {
-    /// Audio effect (e.g., reverb, delay, EQ). Type code: `aufx`.
     Effect,
-    /// Software instrument / synthesizer. Type code: `aumu`.
     Instrument,
-    /// Audio generator (e.g., noise, tone). Type code: `augn`.
     Generator,
-    /// Music device (alias for Instrument). Type code: `aumu`.
-    MusicDevice,
-    /// Music effect (instrument + effect hybrid). Type code: `aumf`.
     MusicEffect,
-    /// Mixer. Type code: `aumx`.
     Mixer,
-    /// Format converter. Type code: `aufc`.
     Converter,
-    /// Output unit. Type code: `auou`.
     Output,
-    /// MIDI processor. Type code: `aumi`.
     MidiProcessor,
-    /// Unknown type.
     Unknown(u32),
 }
 
 impl AuType {
-    /// Convert from the raw four-char-code component type.
     #[cfg(target_os = "macos")]
     pub fn from_raw(component_type: u32) -> Self {
         match component_type {
@@ -48,12 +34,11 @@ impl AuType {
         }
     }
 
-    /// Convert to the raw four-char-code component type.
     #[cfg(target_os = "macos")]
     pub fn to_raw(self) -> u32 {
         match self {
             AuType::Effect => K_AUDIO_UNIT_TYPE_EFFECT,
-            AuType::Instrument | AuType::MusicDevice => K_AUDIO_UNIT_TYPE_MUSIC_DEVICE,
+            AuType::Instrument => K_AUDIO_UNIT_TYPE_MUSIC_DEVICE,
             AuType::Generator => K_AUDIO_UNIT_TYPE_GENERATOR,
             AuType::MusicEffect => K_AUDIO_UNIT_TYPE_MUSIC_EFFECT,
             AuType::Mixer => K_AUDIO_UNIT_TYPE_MIXER,
@@ -64,11 +49,10 @@ impl AuType {
         }
     }
 
-    /// Returns true if this AU type accepts MIDI input.
     pub fn receives_midi(&self) -> bool {
         matches!(
             self,
-            AuType::Instrument | AuType::MusicDevice | AuType::MusicEffect | AuType::MidiProcessor
+            AuType::Instrument | AuType::MusicEffect | AuType::MidiProcessor
         )
     }
 }
@@ -79,31 +63,26 @@ impl std::fmt::Display for AuType {
             AuType::Effect => write!(f, "Effect"),
             AuType::Instrument => write!(f, "Instrument"),
             AuType::Generator => write!(f, "Generator"),
-            AuType::MusicDevice => write!(f, "MusicDevice"),
             AuType::MusicEffect => write!(f, "MusicEffect"),
             AuType::Mixer => write!(f, "Mixer"),
             AuType::Converter => write!(f, "Converter"),
             AuType::Output => write!(f, "Output"),
             AuType::MidiProcessor => write!(f, "MidiProcessor"),
+            #[cfg(target_os = "macos")]
             AuType::Unknown(code) => write!(f, "Unknown({})", fourcc_to_string(*code)),
+            #[cfg(not(target_os = "macos"))]
+            AuType::Unknown(code) => write!(f, "Unknown({code:#x})"),
         }
     }
 }
 
-/// Information about a discovered Audio Unit component.
 #[derive(Debug, Clone)]
 pub struct AuComponentInfo {
-    /// Display name of the plugin.
     pub name: String,
-    /// Manufacturer four-char code as a string.
     pub manufacturer: String,
-    /// Manufacturer four-char code (raw).
     pub manufacturer_code: u32,
-    /// Sub-type four-char code (raw).
     pub sub_type: u32,
-    /// AU type category.
     pub component_type: AuType,
-    /// Opaque handle to the component (valid for the lifetime of the process).
     #[cfg(target_os = "macos")]
     pub component: AudioComponent,
 }
@@ -124,16 +103,11 @@ fn enumerate_with_desc(desc: AudioComponentDescription) -> Vec<AuComponentInfo> 
     results
 }
 
-/// Enumerate all Audio Unit components on the system.
-///
-/// This finds every AUv2 plugin registered with the system by iterating
-/// through `AudioComponentFindNext` with a wildcard description.
 #[cfg(target_os = "macos")]
 pub fn enumerate_components() -> Vec<AuComponentInfo> {
     enumerate_with_desc(AudioComponentDescription::default())
 }
 
-/// Enumerate Audio Unit components of a specific type.
 #[cfg(target_os = "macos")]
 pub fn enumerate_components_of_type(au_type: AuType) -> Vec<AuComponentInfo> {
     enumerate_with_desc(AudioComponentDescription {
@@ -142,35 +116,26 @@ pub fn enumerate_components_of_type(au_type: AuType) -> Vec<AuComponentInfo> {
     })
 }
 
-/// Find a specific Audio Unit component by its full description.
 #[cfg(target_os = "macos")]
 pub fn find_component(desc: &AudioComponentDescription) -> Option<AudioComponent> {
     let component = unsafe { AudioComponentFindNext(std::ptr::null_mut(), desc) };
-    if component.is_null() {
-        None
-    } else {
-        Some(component)
-    }
+    (!component.is_null()).then_some(component)
 }
 
-/// Extract info from a single AudioComponent handle.
 #[cfg(target_os = "macos")]
 fn component_info(component: AudioComponent) -> Option<AuComponentInfo> {
-    // Get the name
-    let mut name_ref: core_foundation_sys::string::CFStringRef = std::ptr::null();
-    let status = unsafe { AudioComponentCopyName(component, &mut name_ref) };
-    let name = if status == NO_ERR && !name_ref.is_null() {
-        let s = unsafe { cfstring_to_string(name_ref) };
-        // AudioComponentCopyName uses the Copy rule, so we must release
-        unsafe {
-            core_foundation_sys::base::CFRelease(name_ref as *const std::os::raw::c_void);
+    let name = unsafe {
+        let mut name_ref: core_foundation_sys::string::CFStringRef = std::ptr::null();
+        let status = AudioComponentCopyName(component, &mut name_ref);
+        if status == NO_ERR {
+            CfString::from_copied(name_ref)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| String::from("<unknown>"))
+        } else {
+            String::from("<unknown>")
         }
-        s
-    } else {
-        String::from("<unknown>")
     };
 
-    // Get the description to extract type/subtype/manufacturer
     let mut comp_desc = AudioComponentDescription::default();
     let status = unsafe { AudioComponentGetDescription(component, &mut comp_desc) };
     if status != NO_ERR {
@@ -201,8 +166,8 @@ mod tests {
     #[test]
     fn test_au_type_receives_midi() {
         assert!(AuType::Instrument.receives_midi());
-        assert!(AuType::MusicDevice.receives_midi());
         assert!(AuType::MusicEffect.receives_midi());
+        assert!(AuType::MidiProcessor.receives_midi());
         assert!(!AuType::Effect.receives_midi());
         assert!(!AuType::Generator.receives_midi());
     }
@@ -218,13 +183,11 @@ mod tests {
             AuType::Mixer,
         ];
         for ty in &types {
-            let raw = ty.to_raw();
-            let back = AuType::from_raw(raw);
+            let back = AuType::from_raw(ty.to_raw());
             assert_eq!(
                 std::mem::discriminant(ty),
                 std::mem::discriminant(&back),
-                "Roundtrip failed for {:?}",
-                ty
+                "Roundtrip failed for {ty:?}"
             );
         }
     }
@@ -233,43 +196,25 @@ mod tests {
     #[test]
     fn test_enumerate_components() {
         let components = enumerate_components();
-        // macOS ships with built-in AUs, so we should find some
         assert!(
             !components.is_empty(),
             "Expected at least one Audio Unit on the system"
         );
-
-        // Print first few for debugging
-        for (i, c) in components.iter().take(5).enumerate() {
-            eprintln!(
-                "  [{}] {} (type={}, manufacturer={})",
-                i, c.name, c.component_type, c.manufacturer
-            );
-        }
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn test_enumerate_effects() {
         let effects = enumerate_components_of_type(AuType::Effect);
-        // macOS ships with Apple effects (AUBandpass, AUDelay, etc.)
-        assert!(
-            !effects.is_empty(),
-            "Expected at least one Effect AU on macOS"
-        );
+        assert!(!effects.is_empty(), "Expected at least one Effect AU");
         for c in &effects {
-            assert_eq!(
-                c.component_type,
-                AuType::Effect,
-                "All results should be Effect type"
-            );
+            assert_eq!(c.component_type, AuType::Effect);
         }
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn test_find_apple_au_delay() {
-        // Apple's built-in AUDelay should always be present
         let desc = AudioComponentDescription {
             component_type: K_AUDIO_UNIT_TYPE_EFFECT,
             component_sub_type: u32::from_be_bytes(*b"dely"),
@@ -277,11 +222,6 @@ mod tests {
             component_flags: 0,
             component_flags_mask: 0,
         };
-
-        let component = find_component(&desc);
-        assert!(
-            component.is_some(),
-            "Apple's AUDelay should be present on macOS"
-        );
+        assert!(find_component(&desc).is_some());
     }
 }

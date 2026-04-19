@@ -1,35 +1,26 @@
 //! Audio Unit (AUv2) plugin hosting for macOS.
 //!
-//! This crate provides low-level bindings to Apple's AudioToolbox framework
-//! for hosting AUv2 (Audio Unit version 2) plugins. It follows the same
-//! pattern as `vst3-host` and `clap-host` in the Tutti ecosystem.
+//! Low-level bindings to Apple's AudioToolbox framework for hosting AUv2
+//! plugins. Follows the same pattern as `vst3-host` and `clap-host`.
 //!
 //! # Platform
 //!
-//! This crate is macOS-only. All public types and functions are gated behind
-//! `#[cfg(target_os = "macos")]`. On other platforms, the crate compiles
-//! but exposes no functionality.
+//! macOS-only. On other platforms the crate compiles but exposes no public
+//! functionality.
 //!
-//! # Usage
+//! # Example
 //!
 //! ```rust,no_run
 //! # #[cfg(target_os = "macos")]
 //! # {
-//! use au_host::component::{enumerate_components, AuType};
+//! use au_host::component::{enumerate_components_of_type, AuType};
 //! use au_host::instance::AuInstance;
 //!
-//! // Discover all effect AUs
-//! let effects = au_host::component::enumerate_components_of_type(AuType::Effect);
-//! for info in &effects {
-//!     println!("{} by {}", info.name, info.manufacturer);
-//! }
-//!
-//! // Instantiate the first one
+//! let effects = enumerate_components_of_type(AuType::Effect);
 //! if let Some(info) = effects.first() {
 //!     let mut au = unsafe { AuInstance::new(info.component, 44100.0, 512) }.unwrap();
 //!     au.initialize().unwrap();
 //!
-//!     // Process audio...
 //!     let input = vec![vec![0.0f32; 512]; 2];
 //!     let mut output = vec![vec![0.0f32; 512]; 2];
 //!     let in_refs: Vec<&[f32]> = input.iter().map(|v| v.as_slice()).collect();
@@ -39,11 +30,27 @@
 //! # }
 //! ```
 
+pub mod error;
+
 #[cfg(target_os = "macos")]
 pub mod types;
 
 #[cfg(target_os = "macos")]
+mod cf;
+
+#[cfg(target_os = "macos")]
+mod ffi;
+
 pub mod component;
+
+#[cfg(target_os = "macos")]
+pub mod handle;
+
+#[cfg(target_os = "macos")]
+pub mod stream;
+
+#[cfg(target_os = "macos")]
+mod buffer;
 
 #[cfg(target_os = "macos")]
 pub mod instance;
@@ -54,15 +61,16 @@ pub mod parameters;
 #[cfg(target_os = "macos")]
 pub mod editor;
 
-// Re-export key types at crate root for convenience
-#[cfg(target_os = "macos")]
 pub use component::{AuComponentInfo, AuType};
-
-#[cfg(target_os = "macos")]
-pub use instance::{AuError, AuInstance, AuParameterInfo};
-
-#[cfg(target_os = "macos")]
-pub use parameters::AuParameter;
+pub use error::{AuError, Result};
 
 #[cfg(target_os = "macos")]
 pub use editor::AuEditor;
+#[cfg(target_os = "macos")]
+pub use handle::AuHandle;
+#[cfg(target_os = "macos")]
+pub use instance::{AuInstance, AuLoaded, AuReady};
+#[cfg(target_os = "macos")]
+pub use parameters::{AuParameter, ParamRange, ParamView, ParameterUnit};
+#[cfg(target_os = "macos")]
+pub use stream::{ChannelLayout, StreamConfig};

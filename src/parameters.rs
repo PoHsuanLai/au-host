@@ -1,17 +1,38 @@
+#![cfg(target_os = "macos")]
+
+use std::marker::PhantomData;
+
+use crate::error::Result;
+use crate::ffi::{check, get_property, get_property_bytes};
 use crate::types::*;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParamRange {
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+}
+
+impl ParamRange {
+    pub fn mid(&self) -> f32 {
+        (self.min + self.max) * 0.5
+    }
+
+    pub fn clamp(&self, v: f32) -> f32 {
+        v.clamp(self.min, self.max)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AuParameter {
     pub id: u32,
     pub name: String,
-    pub min: f32,
-    pub max: f32,
-    pub default: f32,
-    pub unit: AudioUnitParameterUnit,
+    pub range: ParamRange,
+    pub unit: ParameterUnit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AudioUnitParameterUnit {
+pub enum ParameterUnit {
     Generic,
     Boolean,
     Percent,
@@ -22,7 +43,7 @@ pub enum AudioUnitParameterUnit {
     Unknown(u32),
 }
 
-impl AudioUnitParameterUnit {
+impl ParameterUnit {
     pub fn from_raw(raw: u32) -> Self {
         match raw {
             K_AUDIO_UNIT_PARAMETER_UNIT_GENERIC => Self::Generic,
@@ -37,7 +58,7 @@ impl AudioUnitParameterUnit {
     }
 }
 
-impl std::fmt::Display for AudioUnitParameterUnit {
+impl std::fmt::Display for ParameterUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Generic => write!(f, ""),
@@ -47,103 +68,105 @@ impl std::fmt::Display for AudioUnitParameterUnit {
             Self::Hertz => write!(f, "Hz"),
             Self::Decibels => write!(f, "dB"),
             Self::LinearGain => write!(f, "gain"),
-            Self::Unknown(v) => write!(f, "unit({})", v),
+            Self::Unknown(v) => write!(f, "unit({v})"),
         }
     }
 }
 
-/// Enumerate all parameters for the given AU instance (global scope).
-pub fn get_parameter_list(unit: AudioUnit) -> Vec<AuParameter> {
-    let ids = match get_parameter_ids(unit) {
-        Some(ids) => ids,
-        None => return Vec::new(),
+/// Borrowed view over the parameter state of an initialized AU.
+pub struct ParamView<'a> {
+    unit: AudioUnit,
+    _lt: PhantomData<&'a ()>,
+}
+
+impl<'a> ParamView<'a> {
+    /// # Safety
+    /// Caller must ensure `unit` outlives the returned view.
+    pub(crate) unsafe fn new(unit: AudioUnit) -> Self {
+        Self {
+            unit,
+            _lt: PhantomData,
+        }
+    }
+
+    pub fn list(&self) -> Vec<AuParameter> {
+        list(self.unit)
+    }
+
+    pub fn get(&self, id: u32) -> Result<f32> {
+        get(self.unit, id)
+    }
+
+    pub fn set(&self, id: u32, value: f32) -> Result<()> {
+        set(self.unit, id, value)
+    }
+}
+
+pub fn list(unit: AudioUnit) -> Vec<AuParameter> {
+    let ids_bytes = match unsafe {
+        get_property_bytes(
+            unit,
+            K_AUDIO_UNIT_PROPERTY_PARAMETER_LIST,
+            K_AUDIO_UNIT_SCOPE_GLOBAL,
+            0,
+        )
+    } {
+        Ok(b) => b,
+        Err(_) => return Vec::new(),
     };
 
-    let mut params = Vec::with_capacity(ids.len());
-    for id in ids {
-        if let Some(p) = query_parameter_info(unit, id) {
-            params.push(p);
-        }
-    }
-    params
+    let count = ids_bytes.len() / std::mem::size_of::<u32>();
+    let ids: &[u32] =
+        unsafe { std::slice::from_raw_parts(ids_bytes.as_ptr() as *const u32, count) };
+
+    ids.iter().filter_map(|&id| info(unit, id).ok()).collect()
 }
 
-pub fn get_parameter_value(unit: AudioUnit, param_id: u32) -> f32 {
+pub fn get(unit: AudioUnit, id: u32) -> Result<f32> {
     let mut value: f32 = 0.0;
-    unsafe {
-        AudioUnitGetParameter(unit, param_id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, &mut value);
-    }
-    value
+    check("AudioUnitGetParameter", unsafe {
+        AudioUnitGetParameter(unit, id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, &mut value)
+    })?;
+    Ok(value)
 }
 
-pub fn set_parameter_value(unit: AudioUnit, param_id: u32, value: f32) {
-    unsafe {
-        AudioUnitSetParameter(unit, param_id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, value, 0);
-    }
+pub fn set(unit: AudioUnit, id: u32, value: f32) -> Result<()> {
+    check("AudioUnitSetParameter", unsafe {
+        AudioUnitSetParameter(unit, id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, value, 0)
+    })
 }
 
-fn get_parameter_ids(unit: AudioUnit) -> Option<Vec<u32>> {
-    let mut data_size: u32 = 0;
-    let mut writable: i32 = 0;
-    let status = unsafe {
-        AudioUnitGetPropertyInfo(
-            unit,
-            K_AUDIO_UNIT_PROPERTY_PARAMETER_LIST,
-            K_AUDIO_UNIT_SCOPE_GLOBAL,
-            0,
-            &mut data_size,
-            &mut writable,
-        )
-    };
-    if status != NO_ERR || data_size == 0 {
-        return None;
-    }
-
-    let count = data_size as usize / std::mem::size_of::<u32>();
-    let mut ids = vec![0u32; count];
-    let mut actual_size = data_size;
-    let status = unsafe {
-        AudioUnitGetProperty(
-            unit,
-            K_AUDIO_UNIT_PROPERTY_PARAMETER_LIST,
-            K_AUDIO_UNIT_SCOPE_GLOBAL,
-            0,
-            ids.as_mut_ptr() as *mut std::os::raw::c_void,
-            &mut actual_size,
-        )
-    };
-    if status != NO_ERR {
-        return None;
-    }
-    Some(ids)
-}
-
-fn query_parameter_info(unit: AudioUnit, param_id: u32) -> Option<AuParameter> {
-    let mut info: AudioUnitParameterInfo = unsafe { std::mem::zeroed() };
-    let mut size = std::mem::size_of::<AudioUnitParameterInfo>() as u32;
-
-    let status = unsafe {
-        AudioUnitGetProperty(
+fn info(unit: AudioUnit, param_id: u32) -> Result<AuParameter> {
+    let raw: AudioUnitParameterInfo = unsafe {
+        get_property(
             unit,
             K_AUDIO_UNIT_PROPERTY_PARAMETER_INFO,
             K_AUDIO_UNIT_SCOPE_GLOBAL,
             param_id,
-            &mut info as *mut AudioUnitParameterInfo as *mut std::os::raw::c_void,
-            &mut size,
-        )
+        )?
     };
-    if status != NO_ERR {
-        return None;
-    }
 
-    let name = if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0
-        && !info.name_string.is_null()
-    {
-        let s = unsafe { cfstring_to_string(info.name_string) };
+    let name = extract_name(&raw);
+
+    Ok(AuParameter {
+        id: param_id,
+        name,
+        range: ParamRange {
+            min: raw.min_value,
+            max: raw.max_value,
+            default: raw.default_value,
+        },
+        unit: ParameterUnit::from_raw(raw.unit),
+    })
+}
+
+fn extract_name(info: &AudioUnitParameterInfo) -> String {
+    if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0 && !info.name_string.is_null() {
         unsafe {
-            core_foundation_sys::base::CFRelease(info.name_string as *const std::os::raw::c_void);
+            crate::cf::CfString::from_copied(info.name_string)
+                .map(|s| s.to_string())
+                .unwrap_or_default()
         }
-        s
     } else {
         let end = info
             .name
@@ -151,16 +174,7 @@ fn query_parameter_info(unit: AudioUnit, param_id: u32) -> Option<AuParameter> {
             .position(|&b| b == 0)
             .unwrap_or(info.name.len());
         String::from_utf8_lossy(&info.name[..end]).to_string()
-    };
-
-    Some(AuParameter {
-        id: param_id,
-        name,
-        min: info.min_value,
-        max: info.max_value,
-        default: info.default_value,
-        unit: AudioUnitParameterUnit::from_raw(info.unit),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -186,16 +200,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_parameter_list() {
+    fn test_list() {
         let unit = apple_delay_unit();
-        let params = get_parameter_list(unit);
-        assert!(!params.is_empty(), "AUDelay should have parameters");
-        for p in &params {
-            eprintln!(
-                "  id={} name='{}' [{}, {}] default={} unit={}",
-                p.id, p.name, p.min, p.max, p.default, p.unit
-            );
-        }
+        let params = list(unit);
+        assert!(!params.is_empty());
         unsafe {
             AudioUnitUninitialize(unit);
             AudioComponentInstanceDispose(unit);
@@ -203,16 +211,16 @@ mod tests {
     }
 
     #[test]
-    fn test_get_set_parameter_value() {
+    fn test_get_set() {
         let unit = apple_delay_unit();
-        let params = get_parameter_list(unit);
+        let params = list(unit);
         assert!(!params.is_empty());
 
         let p = &params[0];
-        let mid = (p.min + p.max) / 2.0;
-        set_parameter_value(unit, p.id, mid);
-        let val = get_parameter_value(unit, p.id);
-        assert!((val - mid).abs() < 0.01, "Expected ~{}, got {}", mid, val);
+        let mid = p.range.mid();
+        set(unit, p.id, mid).unwrap();
+        let val = get(unit, p.id).unwrap();
+        assert!((val - mid).abs() < 0.01);
 
         unsafe {
             AudioUnitUninitialize(unit);
