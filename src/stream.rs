@@ -89,8 +89,10 @@ impl StreamConfig {
                 &self.block_size,
             )?;
 
-            let out_asbd =
-                AudioStreamBasicDescription::float32(self.sample_rate, self.channels.outputs.max(2));
+            let out_asbd = AudioStreamBasicDescription::float32(
+                self.sample_rate,
+                self.channels.outputs.max(2),
+            );
             let _ = set_property(
                 unit,
                 K_AUDIO_UNIT_PROPERTY_STREAM_FORMAT,

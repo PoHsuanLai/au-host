@@ -1,6 +1,10 @@
 //! Parameter discovery, read, and write APIs for Audio Units.
 
 #![cfg(target_os = "macos")]
+// AudioUnit is an opaque C pointer (`ComponentInstanceRecord*`) that every
+// AudioToolbox call dereferences. Callers must supply a valid unit, same as
+// every other entry point in this crate.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::marker::PhantomData;
 
@@ -203,7 +207,9 @@ fn info(unit: AudioUnit, param_id: u32) -> Result<AuParameter> {
 /// Prefer the modern CFString name if advertised; otherwise fall back to the
 /// 52-byte fixed buffer (null-terminated or full-width).
 fn extract_name(info: &AudioUnitParameterInfo) -> String {
-    if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0 && !info.name_string.is_null() {
+    if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0
+        && !info.name_string.is_null()
+    {
         unsafe {
             crate::cf::CfString::from_copied(info.name_string)
                 .map(|s| s.to_string())

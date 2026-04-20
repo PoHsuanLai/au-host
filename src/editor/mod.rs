@@ -5,6 +5,9 @@
 //! subview of a caller-provided parent `NSView`.
 
 #![cfg(target_os = "macos")]
+// AudioUnit is a raw opaque C pointer; every public helper in this module
+// takes one and delegates to AudioToolbox calls that expect a valid unit.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 mod cocoa;
 

@@ -21,7 +21,9 @@ use crate::types::*;
 //
 // On ARM64, objc_msgSend is not variadic — it uses the standard calling
 // convention, so struct args (NSSize) must be declared explicitly so they
-// land in the correct registers.
+// land in the correct registers. Each selector's real ABI is distinct, which
+// is why we deliberately declare multiple trampolines against the same symbol.
+#[allow(clashing_extern_declarations)]
 extern "C" {
     #[link_name = "objc_msgSend"]
     fn msg_send_bundle_with_url(

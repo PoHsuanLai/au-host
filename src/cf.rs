@@ -73,9 +73,10 @@ cf_owned!(CfData, CFDataRef);
 cf_owned!(CfUrl, CFURLRef);
 cf_owned!(CfPlist, CFPropertyListRef);
 
-impl CfString {
-    pub fn to_string(&self) -> String {
-        unsafe { cfstring_to_string(self.0) }
+impl std::fmt::Display for CfString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = unsafe { cfstring_to_string(self.0) };
+        f.write_str(&s)
     }
 }
 

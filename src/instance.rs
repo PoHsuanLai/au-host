@@ -61,7 +61,11 @@ impl AuInstance {
     /// # Errors
     /// Returns [`AuError::OsStatus`] if instantiation or initial stream-format
     /// configuration fails.
-    pub unsafe fn new(component: AudioComponent, sample_rate: f64, block_size: u32) -> Result<Self> {
+    pub unsafe fn new(
+        component: AudioComponent,
+        sample_rate: f64,
+        block_size: u32,
+    ) -> Result<Self> {
         Ok(AuInstance {
             state: State::Loaded(AuLoaded::new(component, sample_rate, block_size)?),
         })
@@ -274,7 +278,11 @@ impl AuLoaded {
     ///
     /// # Safety
     /// `component` must be a valid, non-null `AudioComponent`.
-    pub unsafe fn new(component: AudioComponent, sample_rate: f64, block_size: u32) -> Result<Self> {
+    pub unsafe fn new(
+        component: AudioComponent,
+        sample_rate: f64,
+        block_size: u32,
+    ) -> Result<Self> {
         let handle = AuHandle::new(component)?;
 
         let probed = StreamConfig::probe(&handle);
