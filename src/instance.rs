@@ -1,3 +1,9 @@
+//! High-level AU instance lifecycle: load → initialize → render.
+//!
+//! [`AuInstance`] is the main entry point for hosting an Audio Unit. It
+//! internally tracks whether the AU has been `AudioUnitInitialize`d and only
+//! permits `process()` calls in the ready state.
+
 #![cfg(target_os = "macos")]
 
 use std::os::raw::c_void;
@@ -12,23 +18,28 @@ use crate::parameters::{self, AuParameter, ParamView};
 use crate::stream::{ChannelLayout, StreamConfig};
 use crate::types::*;
 
-/// An AU that has been instantiated but not yet `AudioUnitInitialize`d.
-/// Used for pre-init configuration and GUI-only hosting.
+/// An AU that has been instantiated but not yet initialized.
+///
+/// In this state parameters and state can be queried/set, the editor can
+/// be opened, but audio rendering is not yet possible.
 pub struct AuLoaded {
     handle: AuHandle,
     config: StreamConfig,
 }
 
-/// An AU that has been initialized and has allocated render buffers.
-/// The only state that can `process()` audio.
+/// An AU that has completed `AudioUnitInitialize` and has render buffers
+/// allocated. This is the only state in which [`AuInstance::process`] will
+/// succeed.
 pub struct AuReady {
     loaded: AuLoaded,
     scratch: RenderScratch,
 }
 
-/// Public façade. Holds either a loaded (pre-init) or ready (post-init) state.
-/// Consumers that only touch parameters, state, or the raw unit can use this
-/// without caring about initialization; `process()` requires `Ready`.
+/// Public façade wrapping either an [`AuLoaded`] or [`AuReady`] state.
+///
+/// Most host operations (parameters, state save/load, editor) work regardless
+/// of initialization status. [`AuInstance::process`] requires the Ready state
+/// and will return `Uninitialized` otherwise.
 pub struct AuInstance {
     state: State,
 }
@@ -36,22 +47,27 @@ pub struct AuInstance {
 enum State {
     Loaded(AuLoaded),
     Ready(AuReady),
-    /// Transient: only ever observed while inside a `take()` → transition → store.
+    /// Transient marker only seen while a `mem::replace` is mid-transition.
     Empty,
 }
 
 impl AuInstance {
-    /// Create a new instance in the `Loaded` state.
+    /// Instantiate an AU in the `Loaded` (pre-init) state.
     ///
     /// # Safety
     /// `component` must be a valid, non-null `AudioComponent` handle obtained
-    /// from `AudioComponentFindNext` or equivalent API.
+    /// from `AudioComponentFindNext` or [`crate::component`].
+    ///
+    /// # Errors
+    /// Returns [`AuError::OsStatus`] if instantiation or initial stream-format
+    /// configuration fails.
     pub unsafe fn new(component: AudioComponent, sample_rate: f64, block_size: u32) -> Result<Self> {
         Ok(AuInstance {
             state: State::Loaded(AuLoaded::new(component, sample_rate, block_size)?),
         })
     }
 
+    /// Transition Loaded → Ready. No-op if already Ready.
     pub fn initialize(&mut self) -> Result<()> {
         match std::mem::replace(&mut self.state, State::Empty) {
             State::Loaded(l) => match l.initialize() {
@@ -69,6 +85,7 @@ impl AuInstance {
         }
     }
 
+    /// Transition Ready → Loaded. No-op if already Loaded.
     pub fn uninitialize(&mut self) -> Result<()> {
         match std::mem::replace(&mut self.state, State::Empty) {
             State::Ready(r) => match r.uninitialize() {
@@ -102,50 +119,65 @@ impl AuInstance {
         }
     }
 
+    /// Raw `AudioUnit` pointer. Useful for interop with AudioToolbox calls
+    /// not yet wrapped by this crate.
     pub fn raw_unit(&self) -> AudioUnit {
         self.handle().raw_unit()
     }
 
+    /// High-level [`AuType`] this component was classified as.
     pub fn au_type(&self) -> AuType {
         self.handle().au_type()
     }
 
+    /// Configured input channel count.
     pub fn num_inputs(&self) -> u32 {
         self.config().channels.inputs
     }
 
+    /// Configured output channel count.
     pub fn num_outputs(&self) -> u32 {
         self.config().channels.outputs
     }
 
+    /// Configured sample rate in Hz.
     pub fn sample_rate(&self) -> f64 {
         self.config().sample_rate
     }
 
+    /// Whether the AU is currently in the `Ready` state.
     pub fn is_initialized(&self) -> bool {
         matches!(self.state, State::Ready(_))
     }
 
+    /// Copy the AU's display name.
     pub fn get_name(&self) -> Result<String> {
         Ok(self.handle().get_name())
     }
 
+    /// Write a parameter value.
     pub fn set_parameter(&mut self, id: u32, value: f32) -> Result<()> {
         parameters::set(self.raw_unit(), id, value)
     }
 
+    /// Read a parameter value.
     pub fn get_parameter(&self, id: u32) -> Result<f32> {
         parameters::get(self.raw_unit(), id)
     }
 
+    /// Enumerate all parameters exposed by the AU.
     pub fn get_parameter_list(&self) -> Vec<AuParameter> {
         parameters::list(self.raw_unit())
     }
 
+    /// Borrow a [`ParamView`] for scoped parameter access.
     pub fn parameters(&self) -> ParamView<'_> {
         unsafe { ParamView::new(self.raw_unit()) }
     }
 
+    /// Plugin-reported processing latency in samples at the current sample rate.
+    ///
+    /// Returns 0 if the AU does not advertise `kAudioUnitProperty_Latency`.
     pub fn get_latency(&self) -> Result<u32> {
         let latency = unsafe {
             get_property::<f64>(
@@ -159,6 +191,8 @@ impl AuInstance {
         Ok((latency * self.sample_rate()) as u32)
     }
 
+    /// Serialize the AU's current state (all parameters + internal state) to
+    /// a binary plist blob suitable for persistence.
     pub fn save_state(&self) -> Result<Vec<u8>> {
         let raw: core_foundation_sys::propertylist::CFPropertyListRef = unsafe {
             get_property(
@@ -174,6 +208,7 @@ impl AuInstance {
         }
     }
 
+    /// Restore state previously produced by [`Self::save_state`]. Empty input is a no-op.
     pub fn load_state(&mut self, data: &[u8]) -> Result<()> {
         if data.is_empty() {
             return Ok(());
@@ -191,6 +226,15 @@ impl AuInstance {
         }
     }
 
+    /// Render `num_frames` of audio through the AU.
+    ///
+    /// `input` and `output` are per-channel planar slices. `num_frames` must
+    /// not exceed the `block_size` passed to [`AuInstance::new`].
+    ///
+    /// # Errors
+    /// Returns [`AuError::OsStatus`] with `Uninitialized` if the AU has not
+    /// been initialized, [`AuError::InvalidBuffer`] if `num_frames` exceeds
+    /// the configured block size, or an `OsStatus` error from `AudioUnitRender`.
     pub fn process(
         &mut self,
         input: &[&[f32]],
@@ -207,6 +251,8 @@ impl AuInstance {
         }
     }
 
+    /// Change the sample rate. If the AU was initialized, it is uninitialized
+    /// for reconfiguration and then re-initialized to preserve the state.
     pub fn set_sample_rate(&mut self, rate: f64) -> Result<()> {
         let was_ready = self.is_initialized();
         if was_ready {
@@ -224,6 +270,10 @@ impl AuInstance {
 }
 
 impl AuLoaded {
+    /// Instantiate and apply the initial stream configuration.
+    ///
+    /// # Safety
+    /// `component` must be a valid, non-null `AudioComponent`.
     pub unsafe fn new(component: AudioComponent, sample_rate: f64, block_size: u32) -> Result<Self> {
         let handle = AuHandle::new(component)?;
 
@@ -238,6 +288,8 @@ impl AuLoaded {
         Ok(Self { handle, config })
     }
 
+    /// Consume self and return an [`AuReady`] after a successful
+    /// `AudioUnitInitialize`.
     pub fn initialize(self) -> Result<AuReady> {
         check("AudioUnitInitialize", unsafe {
             AudioUnitInitialize(self.handle.raw_unit())
@@ -250,30 +302,35 @@ impl AuLoaded {
         })
     }
 
+    /// Borrow the underlying [`AuHandle`].
     pub fn handle(&self) -> &AuHandle {
         &self.handle
     }
 
+    /// Borrow the configured [`StreamConfig`].
     pub fn config(&self) -> &StreamConfig {
         &self.config
     }
 }
 
 impl AuReady {
+    /// Tear down the render session and return to the [`AuLoaded`] state.
     pub fn uninitialize(self) -> Result<AuLoaded> {
-        // Disable the Drop path (which would also uninitialize) so we don't
-        // double-call `AudioUnitUninitialize`.
+        // Disable the Drop path (which would also uninitialize) to avoid a
+        // double `AudioUnitUninitialize`.
         let mut me = std::mem::ManuallyDrop::new(self);
         let status = unsafe { AudioUnitUninitialize(me.loaded.handle.raw_unit()) };
         check("AudioUnitUninitialize", status)?;
         // Move `loaded` out by reading through the ManuallyDrop. Safe because
-        // after this point nothing else touches `me`.
+        // nothing else touches `me` afterwards.
         let loaded = unsafe { std::ptr::read(&me.loaded) };
-        // `scratch` needs to be dropped normally — it contains Vecs.
+        // `scratch` still owns Vecs and must be dropped explicitly.
         unsafe { std::ptr::drop_in_place(&mut me.scratch) };
         Ok(loaded)
     }
 
+    /// Render `num_frames` through the AU. See [`AuInstance::process`] for
+    /// arg semantics and error conditions.
     pub fn process(
         &mut self,
         input: &[&[f32]],
@@ -328,10 +385,12 @@ impl AuReady {
         }
     }
 
+    /// Borrow the underlying [`AuHandle`].
     pub fn handle(&self) -> &AuHandle {
         &self.loaded.handle
     }
 
+    /// Borrow the configured [`StreamConfig`].
     pub fn config(&self) -> &StreamConfig {
         &self.loaded.config
     }

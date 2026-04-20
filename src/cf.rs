@@ -1,3 +1,9 @@
+//! Ownership wrappers around CoreFoundation reference types.
+//!
+//! Each `Cf*` newtype retains the underlying `CF*Ref` and releases it on drop,
+//! giving us a consistent RAII story for strings, data, URLs, and property
+//! lists returned from AudioToolbox APIs.
+
 #![cfg(target_os = "macos")]
 
 use core_foundation_sys::base::{CFRelease, CFRetain, CFTypeRef};
@@ -14,6 +20,9 @@ use std::os::raw::c_void;
 use crate::error::{AuError, Result};
 use crate::types::cfstring_to_string;
 
+/// Generate a `Cf*` newtype with RAII release plus `from_copied` /
+/// `from_borrowed` constructors matching CoreFoundation's "Create" and "Get"
+/// ownership rules.
 macro_rules! cf_owned {
     ($name:ident, $inner:ty) => {
         pub(crate) struct $name($inner);
@@ -24,6 +33,8 @@ macro_rules! cf_owned {
                 self.0
             }
 
+            /// Take ownership of a +1 reference (Create rule). Returns `None`
+            /// if `raw` is null.
             pub unsafe fn from_copied(raw: $inner) -> Option<Self> {
                 if (raw as *const c_void).is_null() {
                     None
@@ -32,6 +43,8 @@ macro_rules! cf_owned {
                 }
             }
 
+            /// Retain a borrowed reference (Get rule). Returns `None` if
+            /// `raw` is null.
             #[allow(dead_code)]
             pub unsafe fn from_borrowed(raw: $inner) -> Option<Self> {
                 if (raw as *const c_void).is_null() {
@@ -77,6 +90,7 @@ impl CfData {
 }
 
 impl CfPlist {
+    /// Serialize the property list to binary plist form.
     pub fn to_binary(&self) -> Result<Vec<u8>> {
         unsafe {
             let raw = CFPropertyListCreateData(
@@ -93,6 +107,7 @@ impl CfPlist {
         }
     }
 
+    /// Parse a binary plist blob back into a property list.
     pub fn from_binary(bytes: &[u8]) -> Result<Self> {
         unsafe {
             let data_raw = CFDataCreate(std::ptr::null(), bytes.as_ptr(), bytes.len() as isize);

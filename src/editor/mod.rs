@@ -1,3 +1,9 @@
+//! Host-side support for AU Cocoa editor views.
+//!
+//! [`AuEditor`] loads the `NSView` the plugin advertises via
+//! `kAudioUnitProperty_CocoaUI`, retains it, and optionally attaches it as a
+//! subview of a caller-provided parent `NSView`.
+
 #![cfg(target_os = "macos")]
 
 mod cocoa;
@@ -10,17 +16,32 @@ use crate::error::Result;
 use crate::ffi::property_size;
 use crate::types::*;
 
+/// Owned handle to an AU's Cocoa editor view.
+///
+/// The editor view is released when the handle is dropped. The handle is
+/// `Send` because the retained `NSView` pointer is self-contained, but all
+/// AppKit calls must still originate from the main thread.
 pub struct AuEditor {
     view: *mut AnyObject,
     unit: AudioUnit,
 }
 
+// SAFETY: the view is released only by our Drop; we never hand out the raw
+// pointer except through `view_ptr()`, so there is no aliasing across threads.
 unsafe impl Send for AuEditor {}
 
 impl AuEditor {
+    /// Instantiate the AU's Cocoa editor view and optionally attach it to a
+    /// parent `NSView`.
+    ///
     /// # Safety
-    /// `unit` must be a valid, initialized AudioUnit handle.
-    /// `parent` (if non-null) must be a valid NSView pointer.
+    /// `unit` must be a valid, initialized `AudioUnit`. `parent`, if non-null,
+    /// must be a valid `NSView*` owned by the caller. Must be called on the
+    /// macOS main thread.
+    ///
+    /// # Errors
+    /// Returns [`crate::error::AuError::InvalidBuffer`] if the AU does not
+    /// advertise a Cocoa view bundle or the view factory fails to load.
     pub unsafe fn open(unit: AudioUnit, parent: *mut c_void) -> Result<Self> {
         let view = cocoa::create_view(unit)?;
 
@@ -32,6 +53,10 @@ impl AuEditor {
         Ok(Self { view, unit })
     }
 
+    /// Whether the AU advertises a Cocoa editor view.
+    ///
+    /// Calls `AudioUnitGetPropertyInfo(kAudioUnitProperty_CocoaUI)` and
+    /// reports `true` if the property exists with a non-zero size.
     pub fn has_editor(unit: AudioUnit) -> bool {
         let size = unsafe {
             property_size(
@@ -44,6 +69,8 @@ impl AuEditor {
         matches!(size, Ok(n) if n > 0)
     }
 
+    /// Remove the view from its superview (if any) and release it. Safe to
+    /// call multiple times; subsequent calls are no-ops.
     pub fn close(&mut self) {
         if !self.view.is_null() {
             unsafe {
@@ -54,7 +81,8 @@ impl AuEditor {
         }
     }
 
-    /// Returns (width, height) of the editor view's frame in points.
+    /// Editor view frame size in points as `(width, height)`. Returns
+    /// `(0, 0)` after [`close`](Self::close).
     pub fn get_size(&self) -> (u32, u32) {
         if self.view.is_null() {
             return (0, 0);
@@ -65,10 +93,13 @@ impl AuEditor {
         }
     }
 
+    /// Raw `NSView*` pointer, useful for embedding the editor in a host-owned
+    /// window hierarchy.
     pub fn view_ptr(&self) -> *mut c_void {
         self.view as *mut c_void
     }
 
+    /// Raw `AudioUnit` this editor was created for.
     pub fn unit(&self) -> AudioUnit {
         self.unit
     }

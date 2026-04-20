@@ -1,3 +1,9 @@
+//! Cocoa view-factory plumbing for AU editors.
+//!
+//! Reads `kAudioUnitProperty_CocoaUI`, loads the advertised bundle, and
+//! instantiates the `NSView` via the factory's `uiViewForAudioUnit:withSize:`
+//! method.
+
 #![cfg(target_os = "macos")]
 
 use objc2::msg_send;
@@ -10,10 +16,10 @@ use crate::error::{AuError, Result};
 use crate::ffi::get_property_bytes;
 use crate::types::*;
 
-// objc_msgSend trampolines for calls where objc2's msg_send! rejects the type
-// encoding (AudioUnit / CFURL are C opaque pointers, not ObjC objects).
+// objc_msgSend trampolines for calls where objc2's msg_send! macro rejects
+// the type encoding (AudioUnit / CFURL are C opaque pointers, not ObjC objects).
 //
-// On ARM64, objc_msgSend is NOT variadic — it uses the standard calling
+// On ARM64, objc_msgSend is not variadic — it uses the standard calling
 // convention, so struct args (NSSize) must be declared explicitly so they
 // land in the correct registers.
 extern "C" {
@@ -33,8 +39,8 @@ extern "C" {
     ) -> *mut AnyObject;
 }
 
-/// Top-level entry: query the AU's CocoaUI info, load the view factory,
-/// and instantiate the editor NSView.
+/// Top-level entry: query the AU's CocoaUI info, load the view factory bundle,
+/// and instantiate the editor `NSView`.
 pub(super) unsafe fn create_view(unit: AudioUnit) -> Result<*mut AnyObject> {
     let (bundle_url, class_name) = load_cocoa_view_info(unit)?;
     let bundle = load_bundle(&bundle_url)?;
@@ -123,7 +129,7 @@ unsafe fn make_view(factory: *mut AnyObject, unit: AudioUnit) -> Result<*mut Any
         ));
     }
 
-    // Retain so we own it independent of the factory's autorelease pool.
+    // Retain so we own it independently of the factory's autorelease pool.
     let view: *mut AnyObject = msg_send![view, retain];
     Ok(view)
 }

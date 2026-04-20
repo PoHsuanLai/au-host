@@ -1,3 +1,8 @@
+//! Render-time buffer management.
+//!
+//! Allocates the variable-length `AudioBufferList` backing storage and the
+//! per-channel scratch buffers used to marshal samples in/out of AudioToolbox.
+
 #![cfg(target_os = "macos")]
 
 use std::os::raw::c_void;
@@ -5,6 +10,10 @@ use std::os::raw::c_void;
 use crate::stream::ChannelLayout;
 use crate::types::*;
 
+/// Backing storage for an `AudioBufferList` plus its trailing `AudioBuffer`s.
+///
+/// The real C struct ends with a flexible-array member, so we allocate a
+/// correctly-sized byte slab and reinterpret it.
 pub(crate) struct RenderBufferList {
     storage: Box<[u8]>,
     channels: usize,
@@ -19,8 +28,8 @@ impl RenderBufferList {
         }
     }
 
-    /// Bind the list to `buffers` (one Vec per channel), returning a pointer
-    /// suitable for `AudioUnitRender` / the input render callback.
+    /// Point the list at `buffers` (one `Vec<f32>` per channel) and return a
+    /// pointer suitable for `AudioUnitRender` or the input render callback.
     pub fn bind(&mut self, buffers: &mut [Vec<f32>], frames: u32) -> *mut AudioBufferList {
         let ptr = self.storage.as_mut_ptr() as *mut AudioBufferList;
         unsafe {
@@ -39,8 +48,8 @@ impl RenderBufferList {
 /// Iterate the `AudioBuffer`s inside a raw `AudioBufferList`.
 ///
 /// # Safety
-/// `abl` must be a valid, well-formed AudioBufferList allocated with at least
-/// `number_buffers` trailing buffers.
+/// `abl` must be a valid, well-formed `AudioBufferList` with at least
+/// `number_buffers` trailing `AudioBuffer`s in contiguous memory.
 pub(crate) unsafe fn iter_buffers_mut<'a>(
     abl: *mut AudioBufferList,
 ) -> impl Iterator<Item = &'a mut AudioBuffer> {
@@ -49,6 +58,8 @@ pub(crate) unsafe fn iter_buffers_mut<'a>(
     (0..count).map(move |i| &mut *base.add(i))
 }
 
+/// Render scratch area: output buffers, input buffers, and a monotonically
+/// advancing sample position used for timestamps.
 pub(crate) struct RenderScratch {
     list: RenderBufferList,
     pub outputs: Vec<Vec<f32>>,
@@ -63,6 +74,8 @@ impl RenderScratch {
         let size = block_size as usize;
 
         let outputs = (0..out_ch).map(|_| vec![0.0f32; size]).collect();
+        // Allocate at least as many input channels as outputs so effects that
+        // report 0 input channels but still pull stereo input don't OOB.
         let inputs = (0..in_ch.max(out_ch)).map(|_| vec![0.0f32; size]).collect();
 
         Self {
@@ -95,6 +108,9 @@ impl RenderScratch {
         }
     }
 
+    /// Return the pre-advance sample position and move the cursor forward by
+    /// `frames`. The pre-advance value is what AudioToolbox expects for the
+    /// current block's timestamp.
     pub fn advance(&mut self, frames: u32) -> f64 {
         let prev = self.sample_position;
         self.sample_position += frames as f64;

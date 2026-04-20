@@ -1,24 +1,41 @@
-//! Audio Component discovery and enumeration.
+//! Audio Component discovery and metadata.
+//!
+//! Wraps `AudioComponentFindNext` and related APIs to enumerate installed
+//! Audio Units and fetch their names, manufacturers, and types.
 
 #[cfg(target_os = "macos")]
 use crate::cf::CfString;
 #[cfg(target_os = "macos")]
 use crate::types::*;
 
+/// High-level classification of an Audio Unit.
+///
+/// Maps the raw four-char `componentType` to a Rust enum. Unknown types are
+/// preserved in [`AuType::Unknown`] so callers can still display them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuType {
+    /// Audio effect (`aufx`).
     Effect,
+    /// Instrument / music device (`aumu`).
     Instrument,
+    /// Audio generator (`augn`).
     Generator,
+    /// MIDI-driven effect (`aumf`).
     MusicEffect,
+    /// Mixer (`aumx`).
     Mixer,
+    /// Format converter (`aufc`).
     Converter,
+    /// Output unit (`auou`).
     Output,
+    /// MIDI processor (`aumi`).
     MidiProcessor,
+    /// A four-char code not recognized by this crate.
     Unknown(u32),
 }
 
 impl AuType {
+    /// Convert a raw AudioToolbox `componentType` code to its typed variant.
     #[cfg(target_os = "macos")]
     pub fn from_raw(component_type: u32) -> Self {
         match component_type {
@@ -34,6 +51,7 @@ impl AuType {
         }
     }
 
+    /// Convert back to the raw AudioToolbox four-char code.
     #[cfg(target_os = "macos")]
     pub fn to_raw(self) -> u32 {
         match self {
@@ -49,6 +67,9 @@ impl AuType {
         }
     }
 
+    /// Whether plugins of this type consume MIDI input.
+    ///
+    /// Used by hosts to decide whether to route MIDI events to the AU.
     pub fn receives_midi(&self) -> bool {
         matches!(
             self,
@@ -76,13 +97,24 @@ impl std::fmt::Display for AuType {
     }
 }
 
+/// Metadata about an Audio Unit discovered on the system.
+///
+/// Returned by [`enumerate_components`] and [`enumerate_components_of_type`].
+/// The `component` field is an opaque handle suitable for passing to
+/// [`crate::instance::AuInstance::new`].
 #[derive(Debug, Clone)]
 pub struct AuComponentInfo {
+    /// Human-readable display name (e.g. `"Apple: AUDelay"`).
     pub name: String,
+    /// Manufacturer four-char code decoded to a string (e.g. `"appl"`).
     pub manufacturer: String,
+    /// Raw manufacturer four-char code.
     pub manufacturer_code: u32,
+    /// Subtype code identifying the specific AU within a manufacturer's catalog.
     pub sub_type: u32,
+    /// High-level type classification.
     pub component_type: AuType,
+    /// Opaque factory handle used to instantiate the AU.
     #[cfg(target_os = "macos")]
     pub component: AudioComponent,
 }
@@ -103,11 +135,13 @@ fn enumerate_with_desc(desc: AudioComponentDescription) -> Vec<AuComponentInfo> 
     results
 }
 
+/// Enumerate every Audio Unit registered with AudioToolbox.
 #[cfg(target_os = "macos")]
 pub fn enumerate_components() -> Vec<AuComponentInfo> {
     enumerate_with_desc(AudioComponentDescription::default())
 }
 
+/// Enumerate only Audio Units of a given [`AuType`].
 #[cfg(target_os = "macos")]
 pub fn enumerate_components_of_type(au_type: AuType) -> Vec<AuComponentInfo> {
     enumerate_with_desc(AudioComponentDescription {
@@ -116,6 +150,9 @@ pub fn enumerate_components_of_type(au_type: AuType) -> Vec<AuComponentInfo> {
     })
 }
 
+/// Look up the first component matching an exact [`AudioComponentDescription`].
+///
+/// Returns `None` if no matching AU is installed.
 #[cfg(target_os = "macos")]
 pub fn find_component(desc: &AudioComponentDescription) -> Option<AudioComponent> {
     let component = unsafe { AudioComponentFindNext(std::ptr::null_mut(), desc) };

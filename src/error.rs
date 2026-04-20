@@ -1,18 +1,36 @@
+//! Error types for Audio Unit hosting.
+
 use std::fmt;
 
 #[cfg(target_os = "macos")]
 use crate::types::*;
 
+/// Errors returned by Audio Unit host operations.
 #[derive(Debug, Clone)]
 pub enum AuError {
-    OsStatus { function: &'static str, code: i32 },
+    /// An AudioToolbox call returned a non-zero `OSStatus`. `function` names
+    /// the failing call (for diagnostics), and `code` is the raw status.
+    OsStatus {
+        /// Name of the AudioToolbox function that failed.
+        function: &'static str,
+        /// Raw `OSStatus` returned by the call.
+        code: i32,
+    },
+    /// A null `AudioComponent` handle was passed where a valid one was required.
     NullComponent,
+    /// A buffer supplied to `process` was malformed or inconsistent with the
+    /// configured stream (wrong frame count, mismatched channels, etc.).
     InvalidBuffer(String),
 }
 
+/// Convenience alias for `Result<T, AuError>`.
 pub type Result<T> = std::result::Result<T, AuError>;
 
 impl AuError {
+    /// Returns a human-readable description of the error.
+    ///
+    /// For `OsStatus` errors this decodes well-known AudioUnit status codes
+    /// (e.g. `-10867` → `"uninitialized"`) and falls back to `"unknown error"`.
     pub fn message(&self) -> &'static str {
         #[cfg(target_os = "macos")]
         {

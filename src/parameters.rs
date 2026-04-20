@@ -1,3 +1,5 @@
+//! Parameter discovery, read, and write APIs for Audio Units.
+
 #![cfg(target_os = "macos")]
 
 use std::marker::PhantomData;
@@ -6,44 +8,67 @@ use crate::error::Result;
 use crate::ffi::{check, get_property, get_property_bytes};
 use crate::types::*;
 
+/// Inclusive `[min, max]` range plus the AU-reported default value.
 #[derive(Debug, Clone, Copy)]
 pub struct ParamRange {
+    /// Minimum legal value.
     pub min: f32,
+    /// Maximum legal value.
     pub max: f32,
+    /// AU-reported default value.
     pub default: f32,
 }
 
 impl ParamRange {
+    /// Midpoint of the range. Useful as a neutral test value.
     pub fn mid(&self) -> f32 {
         (self.min + self.max) * 0.5
     }
 
+    /// Clamp `v` into `[min, max]`.
     pub fn clamp(&self, v: f32) -> f32 {
         v.clamp(self.min, self.max)
     }
 }
 
+/// Fully-described AU parameter: id, display name, range, and unit kind.
 #[derive(Debug, Clone)]
 pub struct AuParameter {
+    /// AudioUnit parameter id used with `AudioUnitSetParameter` etc.
     pub id: u32,
+    /// Human-readable name for UI display.
     pub name: String,
+    /// Legal value range and default.
     pub range: ParamRange,
+    /// Unit classification (dB, Hz, %, …) for display formatting.
     pub unit: ParameterUnit,
 }
 
+/// Classification of a parameter's physical unit.
+///
+/// Hosts use this to choose a display formatter (e.g. append `"Hz"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterUnit {
+    /// Dimensionless / unclassified.
     Generic,
+    /// Treated as a 0/1 toggle.
     Boolean,
+    /// 0..=100 percentage.
     Percent,
+    /// Duration in seconds.
     Seconds,
+    /// Frequency in hertz.
     Hertz,
+    /// Amplitude in decibels.
     Decibels,
+    /// Linear amplitude gain.
     LinearGain,
+    /// An AU-specific unit code this crate doesn't recognize.
     Unknown(u32),
 }
 
 impl ParameterUnit {
+    /// Map a raw `kAudioUnitParameterUnit_*` code onto the typed variant.
     pub fn from_raw(raw: u32) -> Self {
         match raw {
             K_AUDIO_UNIT_PARAMETER_UNIT_GENERIC => Self::Generic,
@@ -73,15 +98,22 @@ impl std::fmt::Display for ParameterUnit {
     }
 }
 
-/// Borrowed view over the parameter state of an initialized AU.
+/// Lifetime-bounded view over the parameter state of an AU.
+///
+/// Borrowed from [`crate::instance::AuInstance::parameters`]; the view is
+/// tied to the instance's lifetime so the raw `AudioUnit` pointer can't
+/// outlive its owner.
 pub struct ParamView<'a> {
     unit: AudioUnit,
     _lt: PhantomData<&'a ()>,
 }
 
 impl<'a> ParamView<'a> {
+    /// Build a view wrapping a raw `AudioUnit`.
+    ///
     /// # Safety
-    /// Caller must ensure `unit` outlives the returned view.
+    /// The caller must guarantee that `unit` remains valid for the lifetime
+    /// `'a`. Crate-internal constructors derive `'a` from an owning handle.
     pub(crate) unsafe fn new(unit: AudioUnit) -> Self {
         Self {
             unit,
@@ -89,19 +121,25 @@ impl<'a> ParamView<'a> {
         }
     }
 
+    /// Enumerate all parameters exposed by this AU.
     pub fn list(&self) -> Vec<AuParameter> {
         list(self.unit)
     }
 
+    /// Read the current value of parameter `id`.
     pub fn get(&self, id: u32) -> Result<f32> {
         get(self.unit, id)
     }
 
+    /// Write a new value to parameter `id`.
     pub fn set(&self, id: u32, value: f32) -> Result<()> {
         set(self.unit, id, value)
     }
 }
 
+/// Enumerate all parameters on the given raw `AudioUnit`.
+///
+/// Returns an empty vec if the AU doesn't advertise a parameter list.
 pub fn list(unit: AudioUnit) -> Vec<AuParameter> {
     let ids_bytes = match unsafe {
         get_property_bytes(
@@ -122,6 +160,7 @@ pub fn list(unit: AudioUnit) -> Vec<AuParameter> {
     ids.iter().filter_map(|&id| info(unit, id).ok()).collect()
 }
 
+/// Read a parameter value.
 pub fn get(unit: AudioUnit, id: u32) -> Result<f32> {
     let mut value: f32 = 0.0;
     check("AudioUnitGetParameter", unsafe {
@@ -130,6 +169,7 @@ pub fn get(unit: AudioUnit, id: u32) -> Result<f32> {
     Ok(value)
 }
 
+/// Write a parameter value.
 pub fn set(unit: AudioUnit, id: u32, value: f32) -> Result<()> {
     check("AudioUnitSetParameter", unsafe {
         AudioUnitSetParameter(unit, id, K_AUDIO_UNIT_SCOPE_GLOBAL, 0, value, 0)
@@ -160,6 +200,8 @@ fn info(unit: AudioUnit, param_id: u32) -> Result<AuParameter> {
     })
 }
 
+/// Prefer the modern CFString name if advertised; otherwise fall back to the
+/// 52-byte fixed buffer (null-terminated or full-width).
 fn extract_name(info: &AudioUnitParameterInfo) -> String {
     if info.flags & K_AUDIO_UNIT_PARAMETER_FLAG_HAS_CF_NAME_STRING != 0 && !info.name_string.is_null() {
         unsafe {
