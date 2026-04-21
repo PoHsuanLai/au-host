@@ -99,10 +99,9 @@ impl std::fmt::Display for AuType {
 
 /// Metadata about an Audio Unit discovered on the system.
 ///
-/// Returned by [`crate::component::enumerate_components`] and
-/// [`crate::component::enumerate_components_of_type`].
+/// Returned by `enumerate_components` and `enumerate_components_of_type`.
 /// The `component` field is an opaque handle suitable for passing to
-/// [`crate::instance::AuInstance::new`].
+/// `AuInstance::new`.
 #[derive(Debug, Clone)]
 pub struct AuComponentInfo {
     /// Human-readable display name (e.g. `"Apple: AUDelay"`).
